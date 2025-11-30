@@ -1,4 +1,4 @@
-# Pentest Tool
+# WE ARE FSOCIETY
 
 Ruby-based penetration testing framework with 90+ attack modules.
 
